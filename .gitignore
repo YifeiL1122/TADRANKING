@@ -9,4 +9,7 @@ __pycache__/
 data/output_demo/
 data/output_experiment/
 
+# External clones
+external/
+
 

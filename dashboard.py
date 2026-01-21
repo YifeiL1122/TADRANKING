@@ -59,35 +59,63 @@ def _apply_admin_filters(auction_df: pd.DataFrame) -> pd.DataFrame:
     if not {"zipcode", "date"}.issubset(df.columns):
         return df
 
-    with st.expander("Filters (zipcode / date)", expanded=False):
+    with st.expander("Filters", expanded=False):
         zips = sorted([z for z in df["zipcode"].dropna().unique().tolist()])
         dates = sorted([d for d in df["date"].dropna().unique().tolist()])
+        merchants = sorted([m for m in df["merchant_id"].dropna().astype(str).unique().tolist()]) if "merchant_id" in df.columns else []
+        ads = sorted([a for a in df["ad_code"].dropna().astype(str).unique().tolist()]) if "ad_code" in df.columns else []
+        slots = sorted([int(s) for s in pd.to_numeric(df["time_slot"], errors="coerce").dropna().unique().tolist()]) if "time_slot" in df.columns else []
 
-        b1, b2 = st.columns([1, 1])
-        with b1:
+        r1c1, r1c2, r1c3, r1c4 = st.columns([1, 1, 1, 1])
+        with r1c1:
             all_z = st.checkbox("All zipcodes", value=True, key="flt_all_zip")
-        with b2:
+        with r1c2:
             all_d = st.checkbox("All dates", value=True, key="flt_all_date")
+        with r1c3:
+            all_m = st.checkbox("All merchants", value=True, key="flt_all_merchant")
+        with r1c4:
+            all_s = st.checkbox("All slots", value=True, key="flt_all_slot")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            sel_zips = st.multiselect(
-                "zipcode",
-                options=zips,
-                default=zips if all_z else [],
-                placeholder="Select zipcodes…",
+        r2c1, r2c2 = st.columns(2)
+        with r2c1:
+            sel_zips = st.multiselect("zipcode", options=zips, default=zips if all_z else [], placeholder="Select zipcodes…")
+        with r2c2:
+            sel_dates = st.multiselect("date", options=dates, default=dates if all_d else [], placeholder="Select dates…")
+
+        r3c1, r3c2 = st.columns(2)
+        with r3c1:
+            sel_merchants = st.multiselect(
+                "merchant_id",
+                options=merchants,
+                default=merchants if all_m else [],
+                placeholder="Select merchants…",
             )
-        with c2:
-            sel_dates = st.multiselect(
-                "date",
-                options=dates,
-                default=dates if all_d else [],
-                placeholder="Select dates…",
+        with r3c2:
+            sel_slots = st.multiselect(
+                "time_slot",
+                options=slots,
+                default=slots if all_s else [],
+                placeholder="Select slots…",
             )
+
+        # Optional ad filter (can be large)
+        sel_ads = []
+        if ads:
+            show_ad_filter = st.checkbox("Filter by ad_code (advanced)", value=False)
+            if show_ad_filter:
+                sel_ads = st.multiselect("ad_code", options=ads, default=[], placeholder="Select ads…")
 
     if not sel_zips or not sel_dates:
         return df.iloc[0:0].copy()
-    return df[df["zipcode"].isin(sel_zips) & df["date"].isin(sel_dates)].copy()
+
+    out = df[df["zipcode"].isin(sel_zips) & df["date"].isin(sel_dates)].copy()
+    if sel_merchants:
+        out = out[out["merchant_id"].astype(str).isin(sel_merchants)].copy()
+    if sel_slots:
+        out = out[pd.to_numeric(out["time_slot"], errors="coerce").isin(sel_slots)].copy()
+    if sel_ads:
+        out = out[out["ad_code"].astype(str).isin(sel_ads)].copy()
+    return out
 
 
 def _recompute_summaries_from_auction(auction_df: pd.DataFrame, budgets_df: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -195,6 +223,42 @@ def _chart_position_mix(auction_df: pd.DataFrame) -> None:
     mix = auction_df.groupby("position", as_index=False).agg(wins=("ad_code", "count"))
     fig = px.pie(mix, names="position", values="wins", title="Win share by position")
     st.plotly_chart(fig, use_container_width=True)
+
+
+def _slot_monitor(auction_df: pd.DataFrame) -> None:
+    import streamlit as st
+
+    if auction_df.empty or "time_slot" not in auction_df.columns:
+        return
+
+    st.subheader("Slot monitor (某个时间段的所有广告)")
+    slots = sorted([int(s) for s in pd.to_numeric(auction_df["time_slot"], errors="coerce").dropna().unique().tolist()])
+    if not slots:
+        return
+    slot = st.selectbox("Pick a time_slot", slots, index=0, key="slot_monitor_pick")
+
+    s_df = auction_df[pd.to_numeric(auction_df["time_slot"], errors="coerce") == slot].copy()
+    if s_df.empty:
+        st.info("No rows for this slot under the current filters.")
+        return
+
+    # Choose columns depending on bid unit
+    if "bid_usd" in s_df.columns:
+        cols = [c for c in ["zipcode", "date", "time_slot", "position", "merchant_id", "ad_code", "bid_usd", "pay_usd", "cost_usd"] if c in s_df.columns]
+    else:
+        cols = [c for c in ["zipcode", "date", "time_slot", "position", "merchant_id", "ad_code", "bid_cpm", "pay_cpm", "impressions", "cost_usd"] if c in s_df.columns]
+
+    st.dataframe(s_df[cols].sort_values(["date", "zipcode", "position"]) if {"date", "zipcode", "position"}.issubset(s_df.columns) else s_df[cols], use_container_width=True)
+
+    # Aggregate view
+    if "ad_code" in s_df.columns:
+        agg = (
+            s_df.groupby(["merchant_id", "ad_code"], as_index=False)
+            .agg(wins=("position", "count"), spend_usd=("cost_usd", "sum"), impressions=("impressions", "sum"))
+            .sort_values("spend_usd", ascending=False)
+        )
+        st.caption("Aggregated by merchant + ad")
+        st.dataframe(agg.head(200), use_container_width=True)
 
 
 def _table_section(outputs: RunOutputs) -> None:
@@ -336,6 +400,7 @@ def main() -> None:
 
     st.divider()
     _chart_top_merchants(filtered_merchant)
+    _slot_monitor(filtered_auction)
     _download_buttons(RunOutputs(auction_df=filtered_auction, merchant_df=filtered_merchant, ad_df=filtered_ad))
     _table_section(RunOutputs(auction_df=filtered_auction, merchant_df=filtered_merchant, ad_df=filtered_ad))
 

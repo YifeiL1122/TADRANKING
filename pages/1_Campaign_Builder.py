@@ -1,0 +1,295 @@
+from __future__ import annotations
+
+import os
+import re
+from datetime import date as dt_date, datetime, timedelta
+
+import pandas as pd
+import streamlit as st
+
+import dashboard as admin_dash
+import gsp_bidding_sim as sim
+
+
+_AD_NUM_RE = re.compile(r"AD(\d+)", re.IGNORECASE)
+
+
+def _infer_max_slot(ads_df: pd.DataFrame) -> int:
+    if ads_df is None or ads_df.empty:
+        return sim.NUM_SLOTS
+    if "time_slot" in ads_df.columns:
+        return int(max(pd.to_numeric(ads_df["time_slot"], errors="coerce").max(), 1))
+    slot_cols = [c for c in ads_df.columns if str(c).startswith("preferred_slot_")]
+    if slot_cols:
+        vals = pd.to_numeric(ads_df[slot_cols].stack(), errors="coerce")
+        m = vals.max()
+        if pd.notna(m):
+            return int(max(m, 1))
+    return sim.NUM_SLOTS
+
+
+def _next_ad_base(existing_ad_codes: list[str]) -> str:
+    max_n = 0
+    for s in existing_ad_codes:
+        m = _AD_NUM_RE.search(str(s))
+        if m:
+            try:
+                max_n = max(max_n, int(m.group(1)))
+            except ValueError:
+                continue
+    return f"AD{max_n + 1:04d}"
+
+
+def _fmt_mmddyyyy(d: dt_date) -> str:
+    return d.strftime("%m%d%Y")
+
+
+def _parse_mmddyyyy(s: str) -> dt_date | None:
+    try:
+        return datetime.strptime(str(s).zfill(8), "%m%d%Y").date()
+    except Exception:
+        return None
+
+
+def _available_date_span_from_base(base_ads_df: pd.DataFrame) -> tuple[dt_date | None, dt_date | None]:
+    """
+    Infer date span from base input by parsing ad_code/ad_id (z<zip>d<MMDDYYYY>).
+    Returns (min_date, max_date) or (None, None) if not available.
+    """
+    if base_ads_df is None or base_ads_df.empty:
+        return None, None
+
+    col = None
+    if "ad_code" in base_ads_df.columns:
+        col = "ad_code"
+    elif "ad_id" in base_ads_df.columns:
+        col = "ad_id"
+    if not col:
+        return None, None
+
+    parsed = base_ads_df[col].astype(str).map(lambda x: sim._parse_ad_code_meta(x)[2])  # type: ignore[attr-defined]
+    dates = [d for d in parsed.dropna().unique().tolist() if d]
+    dt_list = [x for x in (_parse_mmddyyyy(d) for d in dates) if x is not None]
+    if not dt_list:
+        return None, None
+    return min(dt_list), max(dt_list)
+
+
+def _expand_date_range(start: dt_date, end: dt_date) -> list[dt_date]:
+    if end < start:
+        start, end = end, start
+    out: list[dt_date] = []
+    cur = start
+    while cur <= end:
+        out.append(cur)
+        cur = cur + timedelta(days=1)
+    return out
+
+
+def _generate_rows(
+    *,
+    merchant_id: str,
+    ad_base: str,
+    zipcode: str,
+    dates: list[dt_date],
+    slots: list[int],
+    total_budget_usd: float,
+) -> pd.DataFrame:
+    if not slots or not dates:
+        return pd.DataFrame(columns=["merchant_id", "ad_id", "time_slot", "bid_usd"])
+    total_items = len(set(slots)) * len(dates)
+    per_item_bid = round(float(total_budget_usd) / max(total_items, 1), 2)
+
+    rows = []
+    for d in dates:
+        date_str = _fmt_mmddyyyy(d)
+        for s in sorted(set(slots)):
+            # One ad_id per (date, slot)
+            ad_id = f"{ad_base}z{zipcode}d{date_str}s{s:02d}"
+            rows.append(
+                {
+                    "merchant_id": merchant_id,
+                    "ad_id": ad_id,
+                    "time_slot": int(s),
+                    "bid_usd": per_item_bid,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def main() -> None:
+    st.set_page_config(page_title="Campaign Builder", layout="wide")
+    st.title("Campaign Builder (生成广告/预算自动出价)")
+    st.caption("输入 merchant、总预算、zipcode、日期、1–5 个 slot；系统会按预算自动拆分并生成可编辑的 ads 列表。")
+
+    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    input_dir = os.path.join(repo_dir, "data", "input")
+
+    st.subheader("Base input (optional)")
+    base_ads_df, status = admin_dash._load_inputs_ui(input_dir)
+    st.caption(status)
+
+    if "builder_rows" not in st.session_state:
+        st.session_state.builder_rows = pd.DataFrame(columns=["merchant_id", "ad_id", "time_slot", "bid_usd"])
+
+    # Compute defaults from base file (if provided)
+    existing_ad_codes: list[str] = []
+    merchant_options: list[str] = []
+    max_slot = sim.NUM_SLOTS
+    if base_ads_df is not None:
+        existing_ad_codes = base_ads_df.get("ad_code", pd.Series(dtype=str)).astype(str).tolist()
+        if "merchant_id" in base_ads_df.columns:
+            merchant_options = sorted(map(str, base_ads_df["merchant_id"].dropna().unique().tolist()))
+        max_slot = _infer_max_slot(base_ads_df)
+
+    st.divider()
+    st.subheader("Create ad from inputs")
+
+    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1.2])
+    with c1:
+        merchant_id = st.selectbox("merchant_id", merchant_options, index=0) if merchant_options else st.text_input("merchant_id", value="M001")
+    with c2:
+        zipcode = st.text_input("zipcode (zXXXX)", value="98101")
+    with c3:
+        min_d, max_d = _available_date_span_from_base(base_ads_df)
+        mode = st.radio("date mode", ["Single day", "Date range"], horizontal=True)
+        if mode == "Single day":
+            d_single = st.date_input(
+                "date (dMMDDYYYY)",
+                value=min_d or dt_date.today(),
+                min_value=min_d,
+                max_value=max_d,
+            )
+            selected_dates = [d_single]
+        else:
+            # Constrain to base date span if available; otherwise allow any range.
+            default_start = min_d or dt_date.today()
+            default_end = max_d or default_start
+            d_range = st.date_input(
+                "date range (inclusive)",
+                value=(default_start, default_end),
+                min_value=min_d,
+                max_value=max_d,
+            )
+            if isinstance(d_range, tuple) and len(d_range) == 2:
+                selected_dates = _expand_date_range(d_range[0], d_range[1])
+            else:
+                # Fallback (Streamlit returns a single date)
+                selected_dates = [d_range] if isinstance(d_range, dt_date) else [default_start]
+    with c4:
+        total_budget = st.number_input("total budget (USD)", min_value=0.0, value=100.0, step=10.0)
+
+    slots = st.multiselect(
+        "time slots (select 1–5)",
+        options=list(range(1, max_slot + 1)),
+        default=[1],
+        max_selections=5,
+    )
+
+    ad_base_default = _next_ad_base(existing_ad_codes + st.session_state.builder_rows.get("ad_id", pd.Series(dtype=str)).astype(str).tolist())
+    ad_base = st.text_input("AD base (ADxxxx)", value=ad_base_default)
+
+    add_clicked = st.button("Generate and add to list", type="primary")
+    if add_clicked:
+        if not merchant_id.strip():
+            st.error("merchant_id is required.")
+            st.stop()
+        if not zipcode.strip().isdigit():
+            st.error("zipcode must be digits only (e.g. 98101).")
+            st.stop()
+        if not ad_base.strip().upper().startswith("AD"):
+            st.error("AD base must start with 'AD' (e.g. AD0123).")
+            st.stop()
+        if not (1 <= len(slots) <= 5):
+            st.error("Please select 1–5 time slots.")
+            st.stop()
+        if not selected_dates:
+            st.error("Please select at least 1 date.")
+            st.stop()
+
+        new_rows = _generate_rows(
+            merchant_id=str(merchant_id).strip(),
+            ad_base=str(ad_base).strip().upper(),
+            zipcode=str(zipcode).strip(),
+            dates=selected_dates,
+            slots=[int(x) for x in slots],
+            total_budget_usd=float(total_budget),
+        )
+        st.session_state.builder_rows = pd.concat([st.session_state.builder_rows, new_rows], ignore_index=True)
+
+    st.divider()
+    st.subheader("Dynamic editable list (will be exported)")
+    st.caption("你可以直接在表格里改 bid_usd、time_slot 或删除/新增行。")
+
+    edited = st.data_editor(
+        st.session_state.builder_rows,
+        use_container_width=True,
+        num_rows="dynamic",
+        hide_index=True,
+        column_config={
+            "merchant_id": st.column_config.TextColumn("merchant_id"),
+            "ad_id": st.column_config.TextColumn("ad_id"),
+            "time_slot": st.column_config.NumberColumn("time_slot", min_value=1, max_value=max_slot, step=1),
+            "bid_usd": st.column_config.NumberColumn("bid_usd", min_value=0.0, step=0.1),
+        },
+    )
+    st.session_state.builder_rows = edited
+
+    # Basic validation
+    if not edited.empty:
+        if edited["ad_id"].isna().any() or (edited["ad_id"].astype(str).str.len() == 0).any():
+            st.warning("Some rows have empty ad_id.")
+        if pd.to_numeric(edited["bid_usd"], errors="coerce").isna().any():
+            st.warning("Some rows have non-numeric bid_usd.")
+
+    st.divider()
+    st.subheader("Export / run")
+
+    out_name = st.text_input("output filename", value="ads_input_dynamic.csv")
+    out_path = os.path.join(input_dir, out_name)
+
+    b1, b2, b3 = st.columns([1, 1, 2])
+    with b1:
+        if st.button("Save generated CSV to data/input", disabled=edited.empty):
+            os.makedirs(input_dir, exist_ok=True)
+            # Save as long format with ad_id (so loader will rename to ad_code)
+            edited_to_save = edited.copy()
+            edited_to_save["time_slot"] = pd.to_numeric(edited_to_save["time_slot"], errors="coerce").astype("Int64")
+            edited_to_save["bid_usd"] = pd.to_numeric(edited_to_save["bid_usd"], errors="coerce")
+            edited_to_save.to_csv(out_path, index=False)
+            st.success(f"Saved: {out_path}")
+    with b2:
+        if st.button("Clear list"):
+            st.session_state.builder_rows = pd.DataFrame(columns=["merchant_id", "ad_id", "time_slot", "bid_usd"])
+            st.rerun()
+    with b3:
+        st.download_button(
+            "Download generated CSV",
+            data=edited.to_csv(index=False).encode("utf-8") if not edited.empty else b"",
+            file_name=out_name,
+            mime="text/csv",
+            disabled=edited.empty,
+            use_container_width=True,
+        )
+
+    if base_ads_df is not None and not edited.empty:
+        st.divider()
+        st.subheader("Quick simulation (base + generated)")
+        reserve_default = 5.0  # USD bids for generated rows
+        reserve = st.number_input("Reserve (USD)", min_value=0.0, value=reserve_default, step=1.0, key="builder_reserve")
+        if st.button("Run simulation now"):
+            with st.spinner("Running simulation..."):
+                base_bids = sim.ads_to_bids_long(base_ads_df)
+                gen_df = edited.copy().rename(columns={"ad_id": "ad_code"})
+                gen_df = gen_df[["merchant_id", "ad_code", "time_slot", "bid_usd"]].copy()
+                combined_long = pd.concat([base_bids[["merchant_id", "ad_code", "time_slot", "bid_usd"]] if "bid_usd" in base_bids.columns else base_bids[["merchant_id", "ad_code", "time_slot", "bid_cpm"]], gen_df], ignore_index=True)
+                # Re-add missing columns for sim (it parses zipcode/date from ad_code)
+                combined_long = combined_long.dropna(subset=["merchant_id", "ad_code", "time_slot"])
+                auction_df = sim.run_gsp_auctions(sim.ads_to_bids_long(combined_long), reserve_price=float(reserve))
+                st.dataframe(auction_df.head(50), use_container_width=True)
+
+
+if __name__ == "__main__":
+    main()
+
+
