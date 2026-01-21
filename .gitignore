@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Streamlit
+.streamlit/
+
+# Outputs (generated)
+data/output_demo/
+data/output_experiment/
+
+
