@@ -272,6 +272,8 @@ def main() -> None:
 
     if "builder_rows" not in st.session_state:
         st.session_state.builder_rows = pd.DataFrame(columns=["merchant_id", "ad_id", "time_slot", "bid_usd"])
+    if "builder_total_budget" not in st.session_state:
+        st.session_state.builder_total_budget = 100.0
 
     # Compute defaults from base file (if provided)
     existing_ad_codes: list[str] = []
@@ -286,7 +288,7 @@ def main() -> None:
     st.divider()
     st.subheader("Create ads from inputs")
 
-    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1.2])
+    c1, c2, c3 = st.columns([1.2, 1.2, 2.0])
     with c1:
         merchant_id = st.selectbox("merchant_id", merchant_options, index=0) if merchant_options else st.text_input("merchant_id", value="M001")
     with c2:
@@ -317,21 +319,15 @@ def main() -> None:
             else:
                 # Fallback (Streamlit returns a single date)
                 selected_dates = [d_range] if isinstance(d_range, dt_date) else [default_start]
-    with c4:
-        total_budget = st.number_input(
-            "total budget (USD)",
-            min_value=0.0,
-            value=float(st.session_state.get("builder_total_budget", 100.0)),
-            step=10.0,
-            key="builder_total_budget",
-        )
 
     # Timeline selection shows real time windows, but the generated CSV keeps time_slot as 1..8 for analysis.
     slots = _timeline_slot_selector(max_slot=max_slot, max_select=5, key="builder_slots")
 
-    if base_ads_df is not None:
+    # Budget recommendation must run BEFORE we instantiate the total budget widget key,
+    # otherwise Streamlit raises an exception when we try to update session_state for that key.
+    if base_ads_df is not None and selected_dates and slots:
         st.markdown("**Budget recommendation (from history)**")
-        if st.button("Compute recommended budget"):
+        if st.button("Compute recommended budget", key="rec_budget_btn"):
             rec_total, median_thr, n_units = _recommend_budget_from_base(
                 base_ads_df,
                 zipcodes=[str(zipcode).strip()],
@@ -341,10 +337,15 @@ def main() -> None:
             )
             if n_units > 0:
                 st.session_state.builder_total_budget = float(rec_total)
-                st.info(
-                    f"Median 3rd-place threshold ≈ ${median_thr:.2f} / unit × {n_units} units ⇒ recommended total ≈ ${rec_total:.2f}"
-                )
-                st.rerun()
+                st.info(f"Median 3rd-place threshold ≈ ${median_thr:.2f} / unit × {n_units} units ⇒ recommended total ≈ ${rec_total:.2f}")
+
+    total_budget = st.number_input(
+        "total budget (USD)",
+        min_value=0.0,
+        value=float(st.session_state.builder_total_budget),
+        step=10.0,
+        key="builder_total_budget",
+    )
 
     ad_base_default = _next_ad_base(existing_ad_codes + st.session_state.builder_rows.get("ad_id", pd.Series(dtype=str)).astype(str).tolist())
     ad_base = st.text_input("AD base (ADxxxx)", value=ad_base_default)
