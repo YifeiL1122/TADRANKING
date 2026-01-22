@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 import pandas as pd
 
 import gsp_bidding_sim as sim
+from ui_utils import format_slot_label, slot_to_time_window
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ def _apply_admin_filters(auction_df: pd.DataFrame) -> pd.DataFrame:
                 options=slots,
                 default=slots if all_s else [],
                 placeholder="Select slots…",
+                format_func=format_slot_label,
             )
 
         # Optional ad filter (can be large)
@@ -186,12 +188,13 @@ def _chart_spend_by_slot(auction_df: pd.DataFrame) -> None:
         auction_df.groupby("time_slot", as_index=False)
         .agg(total_spend_usd=("cost_usd", "sum"), total_impressions=("impressions", "sum"))
     )
+    slot_spend["time_window"] = pd.to_numeric(slot_spend["time_slot"], errors="coerce").fillna(-1).astype(int).map(slot_to_time_window)
     fig = px.bar(
         slot_spend,
-        x="time_slot",
+        x="time_window" if slot_spend["time_window"].notna().any() else "time_slot",
         y="total_spend_usd",
         title="Spend by time slot",
-        labels={"time_slot": "Time slot", "total_spend_usd": "Spend (USD)"},
+        labels={"time_window": "Time window", "time_slot": "Time slot", "total_spend_usd": "Spend (USD)"},
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -231,22 +234,23 @@ def _slot_monitor(auction_df: pd.DataFrame) -> None:
     if auction_df.empty or "time_slot" not in auction_df.columns:
         return
 
-    st.subheader("Slot monitor (某个时间段的所有广告)")
+    st.subheader("Slot monitor (all ads in a time slot)")
     slots = sorted([int(s) for s in pd.to_numeric(auction_df["time_slot"], errors="coerce").dropna().unique().tolist()])
     if not slots:
         return
-    slot = st.selectbox("Pick a time_slot", slots, index=0, key="slot_monitor_pick")
+    slot = st.selectbox("Pick a time slot", slots, index=0, key="slot_monitor_pick", format_func=format_slot_label)
 
     s_df = auction_df[pd.to_numeric(auction_df["time_slot"], errors="coerce") == slot].copy()
     if s_df.empty:
         st.info("No rows for this slot under the current filters.")
         return
+    s_df["time_window"] = pd.to_numeric(s_df["time_slot"], errors="coerce").fillna(-1).astype(int).map(slot_to_time_window)
 
     # Choose columns depending on bid unit
     if "bid_usd" in s_df.columns:
-        cols = [c for c in ["zipcode", "date", "time_slot", "position", "merchant_id", "ad_code", "bid_usd", "pay_usd", "cost_usd"] if c in s_df.columns]
+        cols = [c for c in ["zipcode", "date", "time_slot", "time_window", "position", "merchant_id", "ad_code", "bid_usd", "pay_usd", "cost_usd"] if c in s_df.columns]
     else:
-        cols = [c for c in ["zipcode", "date", "time_slot", "position", "merchant_id", "ad_code", "bid_cpm", "pay_cpm", "impressions", "cost_usd"] if c in s_df.columns]
+        cols = [c for c in ["zipcode", "date", "time_slot", "time_window", "position", "merchant_id", "ad_code", "bid_cpm", "pay_cpm", "impressions", "cost_usd"] if c in s_df.columns]
 
     st.dataframe(s_df[cols].sort_values(["date", "zipcode", "position"]) if {"date", "zipcode", "position"}.issubset(s_df.columns) else s_df[cols], use_container_width=True)
 
@@ -343,8 +347,8 @@ def main() -> None:
         ) from e
 
     st.set_page_config(page_title="GSP bidding dashboard", layout="wide")
-    st.title("GSP bidding simulation dashboard")
-    st.caption("Load an ads CSV, run the simulation in-memory, and explore spend/impressions and winners.")
+    st.title("Admin dashboard")
+    st.caption("Load an ads CSV, run the simulation, and explore spend/impressions and winners.")
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     input_dir = os.path.join(base_dir, "data", "input")

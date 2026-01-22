@@ -9,6 +9,7 @@ import streamlit as st
 
 import dashboard as admin_dash
 import gsp_bidding_sim as sim
+from ui_utils import slot_to_time_window
 
 
 PREFERRED_SLOTS = sim.PREFERRED_SLOTS
@@ -123,12 +124,13 @@ def _chart_merchant_spend_by_slot(auction_df: pd.DataFrame, merchant_id: str, ti
         return
 
     slot_spend = m.groupby("time_slot", as_index=False).agg(spend_usd=("cost_usd", "sum"))
+    slot_spend["time_window"] = slot_spend["time_slot"].astype(int).map(slot_to_time_window)
     fig = px.bar(
         slot_spend,
-        x="time_slot",
+        x="time_window" if slot_spend["time_window"].notna().any() else "time_slot",
         y="spend_usd",
         title=title,
-        labels={"time_slot": "Time slot", "spend_usd": "Spend (USD)"},
+        labels={"time_window": "Time window", "time_slot": "Time slot", "spend_usd": "Spend (USD)"},
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -156,8 +158,8 @@ def _chart_merchant_top_ads(auction_df: pd.DataFrame, merchant_id: str, title: s
 def main() -> None:
     st.set_page_config(page_title="Merchant Portal", layout="wide")
 
-    st.title("Merchant Portal (商家侧前端)")
-    st.caption("选择你的商家 ID，查看投放结果，并做 what-if 出价调整（只改你这家）。")
+    st.title("Merchant Portal")
+    st.caption("Select a merchant, view results, and run what-if bid adjustments.")
 
     repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     input_dir = os.path.join(repo_dir, "data", "input")
@@ -165,7 +167,7 @@ def main() -> None:
     st.sidebar.caption(status)
 
     if ads_df is None:
-        st.info("先在左侧选择或上传一个 `ads_*.csv`。")
+        st.info("Select or upload an `ads_*.csv` to begin.")
         return
 
     st.sidebar.header("Simulation params")
@@ -181,7 +183,7 @@ def main() -> None:
 
     merchants = sorted(map(str, ads_df["merchant_id"].dropna().unique().tolist()))
     if not merchants:
-        st.error("ads CSV 里找不到 merchant_id。")
+        st.error("merchant_id not found in the ads CSV.")
         return
 
     merchant_id = st.sidebar.selectbox("Your merchant_id", merchants, index=0)
@@ -249,7 +251,9 @@ def main() -> None:
                 .agg(wins=("position", "count"), impressions=("impressions", "sum"), spend_usd=("cost_usd", "sum"))
                 .sort_values(["date", "zipcode", "time_slot"])
             )
-            st.dataframe(breakdown, use_container_width=True)
+            breakdown["time_window"] = breakdown["time_slot"].astype(int).map(slot_to_time_window)
+            cols = ["zipcode", "date", "time_slot", "time_window", "wins", "impressions", "spend_usd"]
+            st.dataframe(breakdown[cols], use_container_width=True)
 
     edited_long_df, _merchant_ads_df = _merchant_long_editor(ads_df, merchant_id)
 

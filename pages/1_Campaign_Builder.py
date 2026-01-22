@@ -9,6 +9,7 @@ import streamlit as st
 
 import dashboard as admin_dash
 import gsp_bidding_sim as sim
+from ui_utils import format_slot_label, slot_to_time_window
 
 
 _AD_NUM_RE = re.compile(r"AD(\d+)", re.IGNORECASE)
@@ -164,7 +165,7 @@ def _timeline_slot_selector(*, max_slot: int, max_select: int, key: str) -> list
         return selected
 
     st.markdown("**Time slots (timeline)**")
-    st.caption("点击从左到右的灯来选择 time slot（最多选 5 个）。")
+    st.caption("Click the lights from left to right to select time slots (max 5).")
 
     cols = st.columns(max_slot)
 
@@ -184,16 +185,17 @@ def _timeline_slot_selector(*, max_slot: int, max_select: int, key: str) -> list
         label = "●" if is_on else "○"
         with cols[i - 1]:
             st.button(label, key=f"{key}_btn_{i}", on_click=toggle, args=(i,))
-            st.caption(str(i))
+            w = slot_to_time_window(i)
+            st.caption(w if w else str(i))
 
     selected = list(sorted(set(int(x) for x in st.session_state[key])))
     if len(selected) > max_select:
         selected = selected[:max_select]
         st.session_state[key] = selected
     if len(selected) == 0:
-        st.warning("请至少选择 1 个 time slot。")
+        st.warning("Select at least 1 time slot.")
     elif len(selected) >= max_select:
-        st.info("已达到最多可选 5 个 time slot。")
+        st.info("You have reached the maximum of 5 selected time slots.")
     return selected
 
 
@@ -258,8 +260,8 @@ def _generate_rows(
 
 def main() -> None:
     st.set_page_config(page_title="Campaign Builder", layout="wide")
-    st.title("Campaign Builder (生成广告/预算自动出价)")
-    st.caption("输入 merchant、总预算、zipcode、日期、1–5 个 slot；系统会按预算自动拆分并生成可编辑的 ads 列表。")
+    st.title("Campaign Builder")
+    st.caption("Enter merchant, total budget, zipcode, date(s), and 1–5 time slots to generate an editable ads list.")
 
     repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     input_dir = os.path.join(repo_dir, "data", "input")
@@ -282,13 +284,13 @@ def main() -> None:
         max_slot = _infer_max_slot(base_ads_df)
 
     st.divider()
-    st.subheader("Create ad from inputs")
+    st.subheader("Create ads from inputs")
 
     c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 1.2])
     with c1:
         merchant_id = st.selectbox("merchant_id", merchant_options, index=0) if merchant_options else st.text_input("merchant_id", value="M001")
     with c2:
-        zipcode = st.text_input("zipcode (zXXXX)", value="98101")
+        zipcode = st.text_input("zipcode", value="98101")
     with c3:
         min_d, max_d = _available_date_span_from_base(base_ads_df)
         mode = st.radio("date mode", ["Single day", "Date range"], horizontal=True)
@@ -324,6 +326,7 @@ def main() -> None:
             key="builder_total_budget",
         )
 
+    # Timeline selection shows real time windows, but the generated CSV keeps time_slot as 1..8 for analysis.
     slots = _timeline_slot_selector(max_slot=max_slot, max_select=5, key="builder_slots")
 
     if base_ads_df is not None:
@@ -376,7 +379,13 @@ def main() -> None:
 
     st.divider()
     st.subheader("Dynamic editable list (will be exported)")
-    st.caption("你可以直接在表格里改 bid_usd、time_slot 或删除/新增行。")
+    st.caption("You can edit bid_usd/time_slot directly, and add/remove rows.")
+
+    with st.expander("Time slot legend", expanded=False):
+        lines = []
+        for i in range(1, 9):
+            lines.append(f"- {format_slot_label(i)}")
+        st.markdown("\n".join(lines))
 
     edited = st.data_editor(
         st.session_state.builder_rows,

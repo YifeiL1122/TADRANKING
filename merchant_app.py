@@ -9,6 +9,7 @@ import plotly.express as px
 import streamlit as st
 
 import gsp_bidding_sim as sim
+from ui_utils import format_slot_label, slot_to_time_window
 
 
 PREFERRED_SLOTS = sim.PREFERRED_SLOTS
@@ -148,12 +149,13 @@ def _chart_spend_by_slot(auction_df: pd.DataFrame, merchant_id: str, title: str)
         st.info("No wins for this merchant under the current simulation.")
         return
     slot_spend = m.groupby("time_slot", as_index=False).agg(spend_usd=("cost_usd", "sum"))
+    slot_spend["time_window"] = slot_spend["time_slot"].astype(int).map(slot_to_time_window)
     fig = px.bar(
         slot_spend,
-        x="time_slot",
+        x="time_window" if slot_spend["time_window"].notna().any() else "time_slot",
         y="spend_usd",
         title=title,
-        labels={"time_slot": "Time slot", "spend_usd": "Spend (USD)"},
+        labels={"time_window": "Time window", "time_slot": "Time slot", "spend_usd": "Spend (USD)"},
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -180,8 +182,8 @@ def _chart_top_ads(auction_df: pd.DataFrame, merchant_id: str, title: str) -> No
 
 def main() -> None:
     st.set_page_config(page_title="Merchant Dashboard", layout="wide")
-    st.title("Merchant dashboard (商家专用)")
-    st.caption("只展示单个 merchant 的数据，并支持 what-if 调参。")
+    st.title("Merchant dashboard")
+    st.caption("View a single merchant's results and run what-if adjustments.")
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     input_dir = os.path.join(base_dir, "data", "input")
@@ -204,7 +206,7 @@ def main() -> None:
 
     merchants = sorted(map(str, ads_df["merchant_id"].dropna().unique().tolist()))
     if not merchants:
-        st.error("ads CSV 里找不到 merchant_id。")
+        st.error("merchant_id not found in the ads CSV.")
         return
 
     qp = st.query_params
@@ -272,7 +274,9 @@ def main() -> None:
                 .agg(wins=("position", "count"), impressions=("impressions", "sum"), spend_usd=("cost_usd", "sum"))
                 .sort_values(["date", "zipcode", "time_slot"])
             )
-            st.dataframe(breakdown, use_container_width=True)
+            breakdown["time_window"] = breakdown["time_slot"].astype(int).map(slot_to_time_window)
+            cols = ["zipcode", "date", "time_slot", "time_window", "wins", "impressions", "spend_usd"]
+            st.dataframe(breakdown[cols], use_container_width=True)
 
     st.divider()
     edited_long = _merchant_editor(ads_df, merchant_id)
