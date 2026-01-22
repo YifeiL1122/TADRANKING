@@ -12,4 +12,7 @@ data/output_experiment/
 # External clones
 external/
 
+# Generated ad inputs (user-created)
+data/input/ads_input_dynamic.csv
+
 
