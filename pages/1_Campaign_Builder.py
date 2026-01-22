@@ -86,6 +86,65 @@ def _expand_date_range(start: dt_date, end: dt_date) -> list[dt_date]:
     return out
 
 
+def _recommend_budget_from_base(
+    base_ads_df: pd.DataFrame,
+    *,
+    zipcodes: list[str],
+    dates: list[dt_date],
+    slots: list[int],
+    default_floor: float = 10.0,
+) -> tuple[float, float, int]:
+    """
+    From bidding_agent.py: use historical 3rd-place threshold per (zipcode,date,slot) and take median.
+    Returns (recommended_total_budget, median_threshold, n_units).
+    """
+    if base_ads_df is None or base_ads_df.empty or not zipcodes or not dates or not slots:
+        return 0.0, 0.0, 0
+
+    bids = sim.ads_to_bids_long(base_ads_df)
+    bids = bids.copy()
+    if "zipcode" in bids.columns:
+        bids["zipcode"] = bids["zipcode"].astype(str)
+    if "date" in bids.columns:
+        bids["date"] = bids["date"].astype(str).str.zfill(8)
+    bids["time_slot"] = pd.to_numeric(bids["time_slot"], errors="coerce").astype("Int64")
+
+    bid_col = "bid_usd" if "bid_usd" in bids.columns else "bid_cpm"
+
+    target_dates = {d.strftime("%m%d%Y") for d in dates}
+    zset = set(map(str, zipcodes))
+    sset = set(map(int, slots))
+
+    filt = bids[
+        bids.get("zipcode", pd.Series(dtype=str)).isin(zset)
+        & bids.get("date", pd.Series(dtype=str)).isin(target_dates)
+        & bids["time_slot"].isin(sset)
+        & pd.to_numeric(bids[bid_col], errors="coerce").notna()
+    ].copy()
+
+    n_units = len(zset) * len(target_dates) * len(sset)
+    if filt.empty:
+        return float(default_floor * n_units), float(default_floor), int(n_units)
+
+    def _third_or_last(s: pd.Series) -> float:
+        vals = pd.to_numeric(s, errors="coerce").dropna().sort_values(ascending=False)
+        if len(vals) >= 3:
+            return float(vals.iloc[2])
+        if len(vals) > 0:
+            return float(vals.iloc[-1])
+        return float(default_floor)
+
+    thresholds = (
+        filt.groupby(["zipcode", "date", "time_slot"], as_index=False)[bid_col]
+        .apply(_third_or_last)
+        .rename(columns={bid_col: "threshold"})
+    )
+
+    median_thr = float(pd.to_numeric(thresholds["threshold"], errors="coerce").median())
+    rec_total = round(median_thr * n_units, 2)
+    return rec_total, round(median_thr, 2), int(n_units)
+
+
 def _generate_rows(
     *,
     merchant_id: str,
@@ -177,7 +236,13 @@ def main() -> None:
                 # Fallback (Streamlit returns a single date)
                 selected_dates = [d_range] if isinstance(d_range, dt_date) else [default_start]
     with c4:
-        total_budget = st.number_input("total budget (USD)", min_value=0.0, value=100.0, step=10.0)
+        total_budget = st.number_input(
+            "total budget (USD)",
+            min_value=0.0,
+            value=float(st.session_state.get("builder_total_budget", 100.0)),
+            step=10.0,
+            key="builder_total_budget",
+        )
 
     slots = st.multiselect(
         "time slots (select 1–5)",
@@ -185,6 +250,23 @@ def main() -> None:
         default=[1],
         max_selections=5,
     )
+
+    if base_ads_df is not None:
+        st.markdown("**Budget recommendation (from history)**")
+        if st.button("Compute recommended budget"):
+            rec_total, median_thr, n_units = _recommend_budget_from_base(
+                base_ads_df,
+                zipcodes=[str(zipcode).strip()],
+                dates=selected_dates,
+                slots=[int(x) for x in slots],
+                default_floor=10.0,
+            )
+            if n_units > 0:
+                st.session_state.builder_total_budget = float(rec_total)
+                st.info(
+                    f"Median 3rd-place threshold ≈ ${median_thr:.2f} / unit × {n_units} units ⇒ recommended total ≈ ${rec_total:.2f}"
+                )
+                st.rerun()
 
     ad_base_default = _next_ad_base(existing_ad_codes + st.session_state.builder_rows.get("ad_id", pd.Series(dtype=str)).astype(str).tolist())
     ad_base = st.text_input("AD base (ADxxxx)", value=ad_base_default)
