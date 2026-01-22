@@ -145,6 +145,86 @@ def _recommend_budget_from_base(
     return rec_total, round(median_thr, 2), int(n_units)
 
 
+def _timeline_slot_selector(*, max_slot: int, max_select: int, key: str) -> list[int]:
+    """
+    A left-to-right "light" timeline slot selector.
+    Stores selected slots in st.session_state[key] as a sorted list[int].
+    """
+    import streamlit as st
+
+    if key not in st.session_state:
+        st.session_state[key] = [1]
+
+    selected: list[int] = list(sorted(set(int(x) for x in st.session_state[key] if x is not None)))
+
+    # For large slot counts, fall back to multiselect (timeline would be too wide).
+    if max_slot > 24:
+        selected = st.multiselect("time slots (select 1–5)", options=list(range(1, max_slot + 1)), default=selected[:max_select], max_selections=max_select)
+        st.session_state[key] = selected
+        return selected
+
+    st.markdown("**Time slots (timeline)**")
+    st.caption("点击从左到右的灯来选择 time slot（最多选 5 个）。")
+
+    cols = st.columns(max_slot)
+
+    def toggle(slot: int) -> None:
+        cur = set(st.session_state[key])
+        if slot in cur:
+            cur.remove(slot)
+        else:
+            if len(cur) >= max_select:
+                # refuse silently; UI shows warning below
+                return
+            cur.add(slot)
+        st.session_state[key] = sorted(cur)
+
+    for i in range(1, max_slot + 1):
+        is_on = i in selected
+        label = "●" if is_on else "○"
+        with cols[i - 1]:
+            st.button(label, key=f"{key}_btn_{i}", on_click=toggle, args=(i,))
+            st.caption(str(i))
+
+    selected = list(sorted(set(int(x) for x in st.session_state[key])))
+    if len(selected) > max_select:
+        selected = selected[:max_select]
+        st.session_state[key] = selected
+    if len(selected) == 0:
+        st.warning("请至少选择 1 个 time slot。")
+    elif len(selected) >= max_select:
+        st.info("已达到最多可选 5 个 time slot。")
+    return selected
+
+
+def _export_long_to_wide_1000_format(long_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert Campaign Builder's long rows (merchant_id, ad_id, time_slot, bid_usd)
+    to the wide format used by the 1000 input table.
+    """
+    df = long_df.copy()
+    if df.empty:
+        cols = ["merchant_id", "ad_id", "num_selected_slots"]
+        for i in range(1, 6):
+            cols += [f"preferred_slot_{i}", f"bid_usd_{i}"]
+        return pd.DataFrame(columns=cols)
+
+    df["time_slot"] = pd.to_numeric(df["time_slot"], errors="coerce").astype("Int64")
+    df["bid_usd"] = pd.to_numeric(df["bid_usd"], errors="coerce")
+    df = df.dropna(subset=["merchant_id", "ad_id", "time_slot", "bid_usd"]).copy()
+
+    out_rows = []
+    for (merchant_id, ad_id), g in df.groupby(["merchant_id", "ad_id"]):
+        g = g.sort_values("time_slot")
+        slots = g["time_slot"].astype(int).tolist()[:5]
+        bids = g["bid_usd"].astype(float).tolist()[:5]
+        row = {"merchant_id": merchant_id, "ad_id": ad_id, "num_selected_slots": len(slots)}
+        for i in range(1, 6):
+            row[f"preferred_slot_{i}"] = slots[i - 1] if i <= len(slots) else pd.NA
+            row[f"bid_usd_{i}"] = bids[i - 1] if i <= len(bids) else pd.NA
+        out_rows.append(row)
+    return pd.DataFrame(out_rows)
+
 def _generate_rows(
     *,
     merchant_id: str,
@@ -244,12 +324,7 @@ def main() -> None:
             key="builder_total_budget",
         )
 
-    slots = st.multiselect(
-        "time slots (select 1–5)",
-        options=list(range(1, max_slot + 1)),
-        default=[1],
-        max_selections=5,
-    )
+    slots = _timeline_slot_selector(max_slot=max_slot, max_select=5, key="builder_slots")
 
     if base_ads_df is not None:
         st.markdown("**Budget recommendation (from history)**")
@@ -327,6 +402,7 @@ def main() -> None:
     st.divider()
     st.subheader("Export / run")
 
+    export_format = st.radio("export format", ["wide (1000 table)", "long (compact)"], horizontal=True)
     out_name = st.text_input("output filename", value="ads_input_dynamic.csv")
     out_path = os.path.join(input_dir, out_name)
 
@@ -334,20 +410,29 @@ def main() -> None:
     with b1:
         if st.button("Save generated CSV to data/input", disabled=edited.empty):
             os.makedirs(input_dir, exist_ok=True)
-            # Save as long format with ad_id (so loader will rename to ad_code)
             edited_to_save = edited.copy()
             edited_to_save["time_slot"] = pd.to_numeric(edited_to_save["time_slot"], errors="coerce").astype("Int64")
             edited_to_save["bid_usd"] = pd.to_numeric(edited_to_save["bid_usd"], errors="coerce")
-            edited_to_save.to_csv(out_path, index=False)
+
+            if export_format.startswith("wide"):
+                out_df = _export_long_to_wide_1000_format(edited_to_save)
+            else:
+                out_df = edited_to_save
+
+            out_df.to_csv(out_path, index=False)
             st.success(f"Saved: {out_path}")
     with b2:
         if st.button("Clear list"):
             st.session_state.builder_rows = pd.DataFrame(columns=["merchant_id", "ad_id", "time_slot", "bid_usd"])
             st.rerun()
     with b3:
+        edited_to_dl = edited.copy()
+        edited_to_dl["time_slot"] = pd.to_numeric(edited_to_dl["time_slot"], errors="coerce").astype("Int64")
+        edited_to_dl["bid_usd"] = pd.to_numeric(edited_to_dl["bid_usd"], errors="coerce")
+        dl_df = _export_long_to_wide_1000_format(edited_to_dl) if export_format.startswith("wide") else edited_to_dl
         st.download_button(
             "Download generated CSV",
-            data=edited.to_csv(index=False).encode("utf-8") if not edited.empty else b"",
+            data=dl_df.to_csv(index=False).encode("utf-8") if not edited.empty else b"",
             file_name=out_name,
             mime="text/csv",
             disabled=edited.empty,
