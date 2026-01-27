@@ -9,7 +9,7 @@ import streamlit as st
 
 import dashboard as admin_dash
 import gsp_bidding_sim as sim
-from ui_utils import slot_to_time_window
+from ui_utils import inject_brand_css, slot_to_time_window
 
 
 PREFERRED_SLOTS = sim.PREFERRED_SLOTS
@@ -157,6 +157,7 @@ def _chart_merchant_top_ads(auction_df: pd.DataFrame, merchant_id: str, title: s
 
 def main() -> None:
     st.set_page_config(page_title="Merchant Portal", layout="wide")
+    inject_brand_css(mode="admin")
 
     st.title("Merchant Portal")
     st.caption("Select a merchant, view results, and run what-if bid adjustments.")

@@ -9,7 +9,7 @@ import plotly.express as px
 import streamlit as st
 
 import gsp_bidding_sim as sim
-from ui_utils import format_slot_label, slot_to_time_window
+from ui_utils import format_slot_label, inject_brand_css, slot_to_time_window
 
 
 PREFERRED_SLOTS = sim.PREFERRED_SLOTS
@@ -182,6 +182,7 @@ def _chart_top_ads(auction_df: pd.DataFrame, merchant_id: str, title: str) -> No
 
 def main() -> None:
     st.set_page_config(page_title="Merchant Dashboard", layout="wide")
+    inject_brand_css(mode="tmobile")
     st.title("Merchant dashboard")
     st.caption("View a single merchant's results and run what-if adjustments.")
 

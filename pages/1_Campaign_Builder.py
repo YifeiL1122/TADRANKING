@@ -9,7 +9,7 @@ import streamlit as st
 
 import dashboard as admin_dash
 import gsp_bidding_sim as sim
-from ui_utils import format_slot_label, slot_to_time_window
+from ui_utils import format_slot_label, inject_brand_css, slot_to_time_window
 
 
 _AD_NUM_RE = re.compile(r"AD(\d+)", re.IGNORECASE)
@@ -260,6 +260,7 @@ def _generate_rows(
 
 def main() -> None:
     st.set_page_config(page_title="Campaign Builder", layout="wide")
+    inject_brand_css(mode="admin")
     st.title("Campaign Builder")
     st.caption("Enter merchant, total budget, zipcode, date(s), and 1–5 time slots to generate an editable ads list.")
 

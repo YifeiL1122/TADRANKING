@@ -94,6 +94,20 @@ h1,h2,h3,h4,h5,h6 {{ color: {text}; }}
   color: {muted};
   font-size: 0.9rem;
 }}
+.chips {{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}}
+.chip {{
+  border: 1px solid {border};
+  background: rgba(255,255,255,0.04);
+  color: {text};
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+}}
 /* Accent */
 .accent {{
   color: {accent};
@@ -103,6 +117,16 @@ button[kind="primary"] {{
   border: 1px solid rgba(255,45,141,0.4) !important;
   background: {accent} !important;
   color: #0B0B10 !important;
+}}
+button {{
+  border-radius: 12px !important;
+}}
+/* Expanders look more like panels */
+[data-testid="stExpander"] {{
+  border: 1px solid {border};
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(180deg, {panel}, {panel2});
 }}
 </style>
 """,
@@ -115,6 +139,25 @@ def card(title: str, subtitle: str | None = None) -> None:
     st.markdown(
         f'<div class="card"><div class="card-title">{title}</div>{sub}</div>',
         unsafe_allow_html=True,
+    )
+
+
+def chips(items: list[str]) -> None:
+    if not items:
+        st.markdown('<div class="chips"><span class="chip">None</span></div>', unsafe_allow_html=True)
+        return
+    inner = "".join([f'<span class="chip">{_escape_html(x)}</span>' for x in items])
+    st.markdown(f'<div class="chips">{inner}</div>', unsafe_allow_html=True)
+
+
+def _escape_html(s: str) -> str:
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#039;")
     )
 
 

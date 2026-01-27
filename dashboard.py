@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import pandas as pd
 
 import gsp_bidding_sim as sim
-from ui_utils import format_slot_label, slot_to_time_window
+from ui_utils import chips, format_slot_label, inject_brand_css, slot_to_time_window
 
 
 @dataclass(frozen=True)
@@ -106,6 +106,15 @@ def _apply_admin_filters(auction_df: pd.DataFrame) -> pd.DataFrame:
             show_ad_filter = st.checkbox("Filter by ad_code (advanced)", value=False)
             if show_ad_filter:
                 sel_ads = st.multiselect("ad_code", options=ads, default=[], placeholder="Select ads…")
+
+        st.markdown("**Selection summary**")
+        s1, s2 = st.columns(2)
+        with s1:
+            st.caption("Zipcodes / Dates")
+            chips([f"{len(sel_zips)} zipcodes", f"{len(sel_dates)} dates"])
+        with s2:
+            st.caption("Merchants / Slots")
+            chips([f"{len(sel_merchants)} merchants", f"{len(sel_slots)} slots"])
 
     if not sel_zips or not sel_dates:
         return df.iloc[0:0].copy()
@@ -347,6 +356,7 @@ def main() -> None:
         ) from e
 
     st.set_page_config(page_title="GSP bidding dashboard", layout="wide")
+    inject_brand_css(mode="admin")
     st.title("Admin dashboard")
     st.caption("Load an ads CSV, run the simulation, and explore spend/impressions and winners.")
 
