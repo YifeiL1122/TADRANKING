@@ -131,6 +131,68 @@ def long_to_wide_1000_format(long_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out_rows)
 
 
+def recommend_budget_from_base(
+    base_ads_df: pd.DataFrame,
+    *,
+    zipcodes: list[str],
+    dates: list[dt_date],
+    slots: list[int],
+    default_floor: float = 10.0,
+) -> tuple[float, float, int]:
+    """
+    Budget recommendation (ported from the older bidding agent idea):
+    - For each (zipcode, date, slot), take the 3rd-highest historical bid as a threshold
+      (fallback to last if <3 bids; fallback to default_floor if no bids).
+    - Use median threshold across all selected units.
+    - Recommended total budget = median_threshold * n_units
+
+    Returns: (recommended_total_budget, median_threshold, n_units)
+    """
+    if base_ads_df is None or base_ads_df.empty or not zipcodes or not dates or not slots:
+        return 0.0, 0.0, 0
+
+    bids = sim.ads_to_bids_long(base_ads_df).copy()
+    if "zipcode" in bids.columns:
+        bids["zipcode"] = bids["zipcode"].astype(str)
+    if "date" in bids.columns:
+        bids["date"] = bids["date"].astype(str).str.zfill(8)
+    bids["time_slot"] = pd.to_numeric(bids["time_slot"], errors="coerce").astype("Int64")
+
+    bid_col = "bid_usd" if "bid_usd" in bids.columns else "bid_cpm"
+    target_dates = {d.strftime("%m%d%Y") for d in dates}
+    zset = set(map(str, zipcodes))
+    sset = set(map(int, slots))
+
+    filt = bids[
+        bids.get("zipcode", pd.Series(dtype=str)).isin(zset)
+        & bids.get("date", pd.Series(dtype=str)).isin(target_dates)
+        & bids["time_slot"].isin(sset)
+        & pd.to_numeric(bids[bid_col], errors="coerce").notna()
+    ].copy()
+
+    n_units = len(zset) * len(target_dates) * len(sset)
+    if filt.empty:
+        return float(default_floor * n_units), float(default_floor), int(n_units)
+
+    def _third_or_last(s: pd.Series) -> float:
+        vals = pd.to_numeric(s, errors="coerce").dropna().sort_values(ascending=False)
+        if len(vals) >= 3:
+            return float(vals.iloc[2])
+        if len(vals) > 0:
+            return float(vals.iloc[-1])
+        return float(default_floor)
+
+    thresholds = (
+        filt.groupby(["zipcode", "date", "time_slot"], as_index=False)[bid_col]
+        .apply(_third_or_last)
+        .rename(columns={bid_col: "threshold"})
+    )
+
+    median_thr = float(pd.to_numeric(thresholds["threshold"], errors="coerce").median())
+    rec_total = round(median_thr * n_units, 2)
+    return rec_total, round(median_thr, 2), int(n_units)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate ads CSV compatible with the ranking system input.")
     parser.add_argument("--base", default=None, help="Optional base ads CSV to infer next AD id and date span.")
