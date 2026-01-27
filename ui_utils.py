@@ -161,3 +161,84 @@ def _escape_html(s: str) -> str:
     )
 
 
+def metric_card(label: str, value: str, delta: str | None = None, icon: str = "📊") -> None:
+    """Enhanced metric card with icon and optional delta."""
+    delta_html = f'<div style="color:#10B981;font-size:0.85rem;margin-top:4px;">▲ {_escape_html(delta)}</div>' if delta else ""
+    st.markdown(
+        f"""
+<div style="background:linear-gradient(135deg,rgba(255,45,141,0.08),rgba(139,92,246,0.08));
+            border:1px solid rgba(255,255,255,0.1);border-radius:16px;padding:20px;text-align:center;">
+  <div style="font-size:2rem;margin-bottom:8px;">{icon}</div>
+  <div style="color:#A6A6C7;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">{_escape_html(label)}</div>
+  <div style="font-size:2rem;font-weight:800;color:#EDEDF7;">{_escape_html(value)}</div>
+  {delta_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def plotly_theme(mode: str = "customer") -> dict:
+    """Returns plotly layout config for consistent theming."""
+    if mode in {"customer", "tmobile"}:
+        return {
+            "plot_bgcolor": "rgba(18,18,32,0.6)",
+            "paper_bgcolor": "rgba(18,18,32,0.6)",
+            "font": {"color": "#EDEDF7", "family": "system-ui, -apple-system, sans-serif"},
+            "colorway": ["#FF2D8D", "#8B5CF6", "#06B6D4", "#10B981", "#F59E0B", "#EF4444"],
+            "xaxis": {"gridcolor": "rgba(255,255,255,0.06)", "zerolinecolor": "rgba(255,255,255,0.1)"},
+            "yaxis": {"gridcolor": "rgba(255,255,255,0.06)", "zerolinecolor": "rgba(255,255,255,0.1)"},
+            "hoverlabel": {"bgcolor": "#1F1F3A", "font": {"color": "#EDEDF7"}},
+        }
+    else:
+        return {
+            "plot_bgcolor": "#FAFAFA",
+            "paper_bgcolor": "#FAFAFA",
+            "font": {"color": "#111827", "family": "system-ui, -apple-system, sans-serif"},
+            "colorway": ["#FF2D8D", "#8B5CF6", "#06B6D4", "#10B981", "#F59E0B", "#EF4444"],
+            "xaxis": {"gridcolor": "rgba(17,24,39,0.06)", "zerolinecolor": "rgba(17,24,39,0.1)"},
+            "yaxis": {"gridcolor": "rgba(17,24,39,0.06)", "zerolinecolor": "rgba(17,24,39,0.1)"},
+        }
+
+
+def styled_dataframe(df, highlight_cols: list[str] | None = None):
+    """Apply conditional formatting to dataframe for better readability."""
+    import pandas as pd
+    
+    if df.empty:
+        return df
+    
+    styler = df.style
+    
+    # Highlight specific columns with gradient
+    if highlight_cols:
+        for col in highlight_cols:
+            if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
+                styler = styler.background_gradient(cmap="YlOrRd", subset=[col], vmin=df[col].min(), vmax=df[col].max())
+    
+    # Format numeric columns
+    for col in df.select_dtypes(include=["float64", "float32"]).columns:
+        styler = styler.format({col: "{:.2f}"})
+    
+    return styler
+
+
+def progress_bar(value: float, max_value: float, label: str = "", color: str = "#FF2D8D") -> None:
+    """Custom progress bar visualization."""
+    pct = min(100, (value / max_value * 100) if max_value > 0 else 0)
+    st.markdown(
+        f"""
+<div style="margin:10px 0;">
+  <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+    <span style="font-size:0.85rem;color:#A6A6C7;">{_escape_html(label)}</span>
+    <span style="font-size:0.85rem;font-weight:600;color:#EDEDF7;">{value:.0f} / {max_value:.0f}</span>
+  </div>
+  <div style="background:rgba(255,255,255,0.1);border-radius:999px;height:8px;overflow:hidden;">
+    <div style="background:{color};height:100%;width:{pct:.1f}%;transition:width 0.3s;"></div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+

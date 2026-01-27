@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import pandas as pd
 
 import gsp_bidding_sim as sim
-from ui_utils import chips, format_slot_label, inject_brand_css, slot_to_time_window
+from ui_utils import chips, format_slot_label, inject_brand_css, slot_to_time_window, metric_card, plotly_theme, styled_dataframe
 
 
 @dataclass(frozen=True)
@@ -179,10 +179,14 @@ def _kpi_row(auction_df: pd.DataFrame) -> None:
     covered_slots = int(auction_df["time_slot"].nunique()) if not auction_df.empty else 0
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total spend (USD)", f"{total_spend:,.2f}")
-    c2.metric("Total impressions", f"{total_imps:,d}")
-    c3.metric("Unique winning ads", f"{unique_ads:,d}")
-    c4.metric("Slots with winners", f"{covered_slots:,d}")
+    with c1:
+        metric_card("Total Spend", f"${total_spend:,.0f}", icon="💰")
+    with c2:
+        metric_card("Impressions", f"{total_imps:,d}", icon="👁️")
+    with c3:
+        metric_card("Winning Ads", f"{unique_ads:,d}", icon="🏆")
+    with c4:
+        metric_card("Active Slots", f"{covered_slots:,d}", icon="⏰")
 
 
 def _chart_spend_by_slot(auction_df: pd.DataFrame) -> None:
@@ -202,9 +206,12 @@ def _chart_spend_by_slot(auction_df: pd.DataFrame) -> None:
         slot_spend,
         x="time_window" if slot_spend["time_window"].notna().any() else "time_slot",
         y="total_spend_usd",
-        title="Spend by time slot",
+        title="Spend by Time Slot",
         labels={"time_window": "Time window", "time_slot": "Time slot", "total_spend_usd": "Spend (USD)"},
+        color="total_spend_usd",
+        color_continuous_scale=["#8B5CF6", "#FF2D8D"],
     )
+    fig.update_layout(**plotly_theme("admin"))
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -220,9 +227,12 @@ def _chart_top_merchants(merchant_df: pd.DataFrame) -> None:
         df,
         x="merchant_id",
         y="total_spend_usd",
-        title=f"Top {top_n} merchants by spend",
+        title=f"Top {top_n} Merchants by Spend",
         labels={"merchant_id": "Merchant", "total_spend_usd": "Spend (USD)"},
+        color="total_spend_usd",
+        color_continuous_scale=["#06B6D4", "#FF2D8D"],
     )
+    fig.update_layout(**plotly_theme("admin"))
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -233,7 +243,16 @@ def _chart_position_mix(auction_df: pd.DataFrame) -> None:
     if auction_df.empty:
         return
     mix = auction_df.groupby("position", as_index=False).agg(wins=("ad_code", "count"))
-    fig = px.pie(mix, names="position", values="wins", title="Win share by position")
+    fig = px.pie(
+        mix, 
+        names="position", 
+        values="wins", 
+        title="Win Share by Position",
+        hole=0.4,
+        color_discrete_sequence=["#FF2D8D", "#8B5CF6", "#06B6D4", "#10B981", "#F59E0B"]
+    )
+    fig.update_layout(**plotly_theme("admin"))
+    fig.update_traces(textposition='inside', textinfo='percent+label')
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -261,7 +280,8 @@ def _slot_monitor(auction_df: pd.DataFrame) -> None:
     else:
         cols = [c for c in ["zipcode", "date", "time_slot", "time_window", "position", "merchant_id", "ad_code", "bid_cpm", "pay_cpm", "impressions", "cost_usd"] if c in s_df.columns]
 
-    st.dataframe(s_df[cols].sort_values(["date", "zipcode", "position"]) if {"date", "zipcode", "position"}.issubset(s_df.columns) else s_df[cols], use_container_width=True)
+    display_df = s_df[cols].sort_values(["date", "zipcode", "position"]) if {"date", "zipcode", "position"}.issubset(s_df.columns) else s_df[cols]
+    st.dataframe(styled_dataframe(display_df, highlight_cols=["cost_usd"]), use_container_width=True)
 
     # Aggregate view
     if "ad_code" in s_df.columns:
@@ -271,7 +291,7 @@ def _slot_monitor(auction_df: pd.DataFrame) -> None:
             .sort_values("spend_usd", ascending=False)
         )
         st.caption("Aggregated by merchant + ad")
-        st.dataframe(agg.head(200), use_container_width=True)
+        st.dataframe(styled_dataframe(agg.head(200), highlight_cols=["spend_usd"]), use_container_width=True)
 
 
 def _table_section(outputs: RunOutputs) -> None:

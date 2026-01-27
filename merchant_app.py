@@ -9,7 +9,7 @@ import plotly.express as px
 import streamlit as st
 
 import gsp_bidding_sim as sim
-from ui_utils import format_slot_label, inject_brand_css, slot_to_time_window
+from ui_utils import format_slot_label, inject_brand_css, slot_to_time_window, metric_card, plotly_theme, styled_dataframe, progress_bar
 
 
 PREFERRED_SLOTS = sim.PREFERRED_SLOTS
@@ -68,12 +68,16 @@ def _merchant_kpis(auction_df: pd.DataFrame, merchant_id: str) -> dict[str, floa
 
 
 def _kpi_row(kpis: dict[str, float], title: str) -> None:
-    st.markdown(f"**{title}**")
+    st.markdown(f"### {title}")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Spend (USD)", f"{kpis['spend']:,.2f}")
-    c2.metric("Impressions", f"{int(kpis['imps']):,d}")
-    c3.metric("Wins (positions)", f"{int(kpis['wins']):,d}")
-    c4.metric("Avg pay", f"{kpis['avg_pay']:,.2f}")
+    with c1:
+        metric_card("Spend", f"${kpis['spend']:,.0f}", icon="💰")
+    with c2:
+        metric_card("Impressions", f"{int(kpis['imps']):,d}", icon="👁️")
+    with c3:
+        metric_card("Wins", f"{int(kpis['wins']):,d}", icon="🏆")
+    with c4:
+        metric_card("Avg Pay", f"${kpis['avg_pay']:,.2f}", icon="📊")
 
 
 def _merchant_editor(ads_df: pd.DataFrame, merchant_id: str) -> pd.DataFrame:
@@ -156,7 +160,10 @@ def _chart_spend_by_slot(auction_df: pd.DataFrame, merchant_id: str, title: str)
         y="spend_usd",
         title=title,
         labels={"time_window": "Time window", "time_slot": "Time slot", "spend_usd": "Spend (USD)"},
+        color="spend_usd",
+        color_continuous_scale=["#8B5CF6", "#FF2D8D"],
     )
+    fig.update_layout(**plotly_theme("tmobile"))
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -176,7 +183,10 @@ def _chart_top_ads(auction_df: pd.DataFrame, merchant_id: str, title: str) -> No
         y="spend_usd",
         title=title,
         labels={"ad_code": "Ad", "spend_usd": "Spend (USD)"},
+        color="spend_usd",
+        color_continuous_scale=["#06B6D4", "#FF2D8D"],
     )
+    fig.update_layout(**plotly_theme("tmobile"))
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -277,7 +287,7 @@ def main() -> None:
             )
             breakdown["time_window"] = breakdown["time_slot"].astype(int).map(slot_to_time_window)
             cols = ["zipcode", "date", "time_slot", "time_window", "wins", "impressions", "spend_usd"]
-            st.dataframe(breakdown[cols], use_container_width=True)
+            st.dataframe(styled_dataframe(breakdown[cols], highlight_cols=["spend_usd"]), use_container_width=True)
 
     st.divider()
     edited_long = _merchant_editor(ads_df, merchant_id)
@@ -321,16 +331,24 @@ def main() -> None:
         w_kpis = _merchant_kpis(w_filt, merchant_id)
 
         st.divider()
-        st.markdown("**Baseline vs What-if**")
+        st.markdown("### What-if Results")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Spend (USD)", f"{w_kpis['spend']:,.2f}", delta=f"{w_kpis['spend']-base_kpis['spend']:,.2f}")
-        c2.metric("Impressions", f"{int(w_kpis['imps']):,d}", delta=f"{int(w_kpis['imps']-base_kpis['imps']):,d}")
-        c3.metric("Wins", f"{int(w_kpis['wins']):,d}", delta=f"{int(w_kpis['wins']-base_kpis['wins']):,d}")
-        c4.metric(
-            "Avg pay",
-            f"{w_kpis['avg_pay']:,.2f}",
-            delta=f"{w_kpis['avg_pay']-base_kpis['avg_pay']:,.2f}",
-        )
+        with c1:
+            delta_spend = w_kpis['spend'] - base_kpis['spend']
+            delta_str = f"+${delta_spend:,.0f}" if delta_spend >= 0 else f"${delta_spend:,.0f}"
+            metric_card("Spend", f"${w_kpis['spend']:,.0f}", delta=delta_str, icon="💰")
+        with c2:
+            delta_imps = int(w_kpis['imps'] - base_kpis['imps'])
+            delta_str = f"+{delta_imps:,d}" if delta_imps >= 0 else f"{delta_imps:,d}"
+            metric_card("Impressions", f"{int(w_kpis['imps']):,d}", delta=delta_str, icon="👁️")
+        with c3:
+            delta_wins = int(w_kpis['wins'] - base_kpis['wins'])
+            delta_str = f"+{delta_wins:,d}" if delta_wins >= 0 else f"{delta_wins:,d}"
+            metric_card("Wins", f"{int(w_kpis['wins']):,d}", delta=delta_str, icon="🏆")
+        with c4:
+            delta_pay = w_kpis['avg_pay'] - base_kpis['avg_pay']
+            delta_str = f"+${delta_pay:,.2f}" if delta_pay >= 0 else f"${delta_pay:,.2f}"
+            metric_card("Avg Pay", f"${w_kpis['avg_pay']:,.2f}", delta=delta_str, icon="📊")
 
         left2, right2 = st.columns([3, 2])
         with left2:
